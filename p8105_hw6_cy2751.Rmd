@@ -11,6 +11,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(readr)
 library(tidyverse)
 library(purrr)
+library(broom)
+library(modelr)
 ```
 
 ## Problem 1
@@ -31,6 +33,175 @@ homicide <- read_csv("data/homicide-data.csv")%>%
            (city_state != "Kansas City, MO")) %>% 
   filter((victim_race == "White") | (victim_race == "Black")) %>% 
   mutate(victim_age = as.numeric(case_when(victim_age == "Unknown" ~ NA,
-                                .default = victim_age)))
+                                .default = victim_age)),
+         victim_race = fct_relevel(victim_race, "White")) %>% 
+  filter(victim_sex != "Unknown")
 
 ```
+
+```{r}
+baltimore_df <- homicide %>% 
+  filter(city == "Baltimore")
+
+city_name_bal <- homicide %>% distinct(city_state) %>% 
+  filter(city_state == "Baltimore, MD")
+
+(fit_logistic_bal <- 
+  baltimore_df %>%  
+  glm(status ~ victim_age + victim_race + victim_sex, data = ., family = binomial()))
+
+(OR_bal <- fit_logistic_bal %>%  
+  broom::tidy() %>% 
+  filter(term == "victim_sexMale") %>% 
+  mutate(OR = exp(estimate),
+         CI_low = exp(estimate - 1.96 * std.error),
+         CI_high = exp(estimate + 1.96 * std.error)) %>% 
+  select(OR, CI_low,CI_high) %>%
+  mutate(city_state = city_name_bal) %>% 
+  unnest() %>% select(city_state,everything()) %>% 
+  knitr::kable(digits = 3))
+```
+
+
+```{r,warning=FALSE}
+est_and_CI <- function(x){
+  
+  city_df <- homicide %>% 
+    filter(city_state == x)
+  
+  city_name_all <- homicide %>% distinct(city_state) %>% 
+    filter(city_state == x)
+  
+  fit_logistic_all <- city_df %>%  
+    glm(status ~ victim_age + victim_race + victim_sex, data = ., family =
+        binomial())
+  
+  OR_all <- fit_logistic_all %>%  
+    broom::tidy() %>% 
+    filter(term == "victim_sexMale") %>% 
+    mutate(OR = exp(estimate),
+          CI_low = exp(estimate - 1.96 * std.error),
+          CI_high = exp(estimate + 1.96 * std.error)) %>% 
+    select(OR, CI_low,CI_high) %>%
+    mutate(city_state = city_name_all) %>% 
+    unnest() %>% select(city_state,everything()) 
+  
+  OR_all
+}
+
+city_states_name <- homicide %>% distinct(city_state) %>% pull(city_state)
+
+
+(OR_table_all <- map_dfr(city_states_name, \(x) est_and_CI(x)))
+
+```
+
+```{r}
+OR_table_all %>% 
+  mutate(city_state = reorder(city_state, OR)) %>%
+  ggplot(aes(x = city_state, y = OR)) +
+  geom_errorbar(aes(ymin = CI_low, ymax = CI_high)) +
+    geom_point()+
+  theme(axis.text.x = element_text(size = 5,angle = 90,hjust = 1))+
+  ggtitle("Odds Ratio for Solving homicides among sex")
+```
+
+The plot shows the odds ratio for solving homicides between different sexes. We can see most of the cities have odds ratio less than 1, which means female victims are more likely to be solved by arrest than male victims.\
+For cities like Tulsa and Atlanta, they have odds ratio close to 1, which means there is almost no difference between the likelihood of solving homicides among different genders. In cities such as New York and Cincinnati, their odds ratios are smaller than 1, showing a trend that homicides involving female victims might be slightly more likely to be solved by arrest. For cities that have wide range of confidence interval, it means the dataset for this city may not be large enough or there is a higher variability inside the dataset.
+
+## Problem 3
+
+```{r}
+bwt_df <- 
+  read_csv("data/birthweight.csv") %>% 
+  janitor::clean_names() %>% 
+  mutate(babysex = case_match(babysex,
+                              1 ~ "male",
+                              2 ~ "female"),
+         babysex = fct_infreq(babysex),
+         frace = case_match(frace,
+                            1 ~ "white",
+                            2 ~ "black",
+                            3 ~ "asian",
+                            4 ~ "puerto rican",
+                            8 ~ "other",
+                            9 ~ "unknown"),
+         frace = fct_infreq(frace),
+         mrace = case_match(mrace,
+                            1 ~ "white",
+                            2 ~ "black",
+                            3 ~ "asian",
+                            4 ~ "puerto rican",
+                            8 ~ "other"),
+         mrace = fct_infreq(mrace),
+         malform = as.logical(malform)) %>% 
+  drop_na()
+
+```
+```{r}
+fit <-  lm(bwt ~ menarche + mheight + momage, data = bwt_df)
+
+summary(fit)
+
+fit %>%  
+  broom::tidy() %>%  
+  select(term, estimate, p.value)
+```
+
+Since baby's birth weight is no doubt related to mother, so I choose to model birth weight based on mother's body condition: mother's age at menarche, mother's age at delivery and mother's height.
+
+```{r}
+bwt_df %>% 
+  select(bwt,menarche, mheight, momage) %>% 
+  add_residuals(fit) %>% 
+  add_predictions(fit) %>% 
+  ggplot(aes(x = pred,y = resid))+
+  geom_point()+
+  ggtitle("Residuals vs Fitted")
+```
+```{r}
+fit_2 <- lm(bwt ~ blength + gaweeks, data = bwt_df)
+```
+
+
+```{r}
+fit_3 <- lm(bwt ~ bhead * blength * babysex, data = bwt_df)
+```
+
+```{r}
+cv_df <-
+  crossv_mc(bwt_df, 100) %>%  
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+
+cv_df_2 <- 
+  cv_df %>%  
+  mutate(
+    fit = map(train, \(df) lm(bwt ~ menarche + mheight + momage, data = df)),
+    fit_2 = map(train, \(df) lm(bwt ~ blength + gaweeks, data = bwt_df)),
+    fit_3 = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = bwt_df))) %>%  
+  mutate(
+    rmse_fit = map2_dbl(fit, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_fit2 = map2_dbl(fit_2, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_fit3 = map2_dbl(fit_3, test, \(mod, df) rmse(model = mod, data = df)))
+```
+
+```{r}
+cv_df_2 %>%  
+  select(starts_with("rmse")) %>%  
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>%  
+  mutate(model = fct_inorder(model)) %>%  
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+
+Since all three models are linear, they are almost the same on complexity with goodness of fit and interpretability. Accordingly, the third model: the one using head circumference, length, sex and all interactions has the lowest rmse wins.
+
+
+
+
