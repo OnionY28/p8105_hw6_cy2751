@@ -18,8 +18,89 @@ library(modelr)
 ## Problem 1
 
 ```{r}
-
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
 ```
+
+
+
+```{r}
+boots <- weather_df %>% 
+  modelr::bootstrap(n = 5000)
+
+boots %>% mutate(
+  models = map(strap, \(df) lm(tmax ~ tmin, data = df)),
+  results = map(models, broom::glance)) %>% 
+  select(results)  %>% 
+  unnest(results) %>% 
+  select(r.squared)  %>%  
+  ggplot(aes(x = r.squared)) + geom_density()+
+  ggtitle("Distribution of R^2")
+```
+
+This distribution has a heavy tail extending to low values features that may be related to the frequency with which large outliers are included in the bootstrap sample.
+
+```{r}
+boots %>% mutate(
+  models = map(strap, \(df) lm(tmax ~ tmin, data = df)),
+  results = map(models, broom::glance)) %>% 
+  select(results)  %>% 
+  unnest(results) %>% 
+  select(r.squared) %>% 
+  summarise(
+    low = quantile(r.squared, 0.025),
+    high = quantile(r.squared, 0.975)
+  )
+```
+
+The 95% confidence interval for R square is (0.894,0.927).
+
+```{r}
+boots %>% mutate(
+  models = map(strap, \(df) lm(tmax ~ tmin, data = df)),
+  results = map(models, broom::tidy)) %>% 
+  select(results)  %>% 
+  unnest(results) %>% 
+  select(term,estimate)  %>%  
+  pivot_wider(names_from = "term",
+              values_from = "estimate") %>% 
+  unnest() %>% 
+  mutate(
+    log_val = log(`(Intercept)` * tmin)
+  ) %>% 
+  ggplot(aes(x = log_val)) + geom_density()+
+  ggtitle("Distribution of log(beta1_hat * beta0_hat)")
+```
+This distribution is almost symmetric so that we can see the bootstrap sample is normal.
+
+```{r}
+boots %>% mutate(
+  models = map(strap, \(df) lm(tmax ~ tmin, data = df)),
+  results = map(models, broom::tidy)) %>% 
+  select(results)  %>% 
+  unnest(results) %>% 
+  select(term,estimate)  %>%  
+  pivot_wider(names_from = "term",
+              values_from = "estimate") %>% 
+  unnest() %>% 
+  mutate(
+    log_val = log(`(Intercept)` * tmin)) %>% 
+  summarise(
+    low = quantile(log_val, 0.025),
+    high = quantile(log_val, 0.975)
+  )
+```
+
+The 95% confidence interval for log(beta1_hat * beta0_hat) is (1.966,2.060).
 
 
 ## Problem 2
