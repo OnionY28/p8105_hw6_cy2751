@@ -238,6 +238,7 @@ bwt_df %>%
   add_predictions(fit) %>% 
   ggplot(aes(x = pred,y = resid))+
   geom_point()+
+  geom_smooth()+
   ggtitle("Residuals vs Fitted")
 ```
 ```{r}
